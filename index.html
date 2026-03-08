@@ -6,6 +6,74 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EasyRPG Player</title>
   <script>
+  // セーブデータ（エクスポート）ダウンロード機能
+  function exportSaveData() {
+    try {
+      // 仮想ファイルシステムの /Save ディレクトリからファイル一覧を取得
+      const files = FS.readdir('/Save');
+      let foundSave = false;
+
+      files.forEach(file => {
+        // RPGツクール2000/2003のセーブデータ拡張子は通常 .lsd
+        if (file.endsWith('.lsd')) {
+          foundSave = true;
+          // ファイルを読み込んでBlob化
+          const data = FS.readFile('/Save/' + file);
+          const blob = new Blob([data], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          
+          // ダウンロード用のリンクを生成してクリックさせる
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = file;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+      });
+
+      if (!foundSave) {
+        alert("セーブデータが見つかりませんでした。");
+      }
+    } catch (e) {
+      console.error("セーブデータのエクスポートに失敗しました", e);
+      alert("エクスポート中にエラーが発生しました。");
+    }
+  }
+
+  // セーブデータ（インポート）アップロード機能
+  function importSaveData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const data = new Uint8Array(e.target.result);
+      try {
+        // 仮想ファイルシステムに書き込み
+        FS.writeFile('/Save/' + file.name, data);
+        
+        // ブラウザ内の永続ストレージ(IndexedDBなど)と同期
+        FS.syncfs(false, function(err) {
+          if (err) {
+            console.error("同期エラー:", err);
+            alert("セーブデータの保存に失敗しました。");
+          } else {
+            alert(file.name + " をインポートしました！ゲーム内でロードしてください。");
+          }
+        });
+      } catch (err) {
+        console.error("ファイル書き込みエラー", err);
+        alert("インポート中にエラーが発生しました。");
+      }
+    };
+    // ファイルをArrayBufferとして読み込む
+    reader.readAsArrayBuffer(file);
+    
+    // 連続して同じファイルを読み込めるようにinputの値をリセット
+    event.target.value = '';
+  }
     const gamename = 'Ruina';
     window.onload = function () {
       if (!window.location.search.includes('game=' + gamename)) {
@@ -242,6 +310,12 @@
       src="data:image/svg+xml;base64,PHN2ZyB2aWV3Ym94PSIwIDAgMTUgMTUiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjI1IiBoZWlnaHQ9IjI1Ij48cGF0aCBkPSJNMTMuNSAxMy41SDEwbTMuNSAwVjEwbTAgMy41bC00LTRtLjUtOGgzLjVtMCAwVjVtMC0zLjVsLTQgNE01IDEuNUgxLjVtMCAwVjVtMC0zLjVsNCA0bS00IDQuNXYzLjVtMCAwSDVtLTMuNSAwbDQtNCIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiPjwvcGF0aD48L3N2Zz4="
       alt="Controls">
     <button id="showGamelist">Game List</button>
+  </div>
+
+  <div style="position: absolute; top: 10px; left: 10px; z-index: 100;">
+    <button onclick="exportSaveData()" style="padding: 10px; cursor: pointer;">セーブデータをエクスポート</button>
+    <button onclick="document.getElementById('importInput').click()" style="padding: 10px; cursor: pointer;">セーブデータをインポート</button>
+    <input type="file" id="importInput" style="display: none;" accept=".lsd" onchange="importSaveData(event)">
   </div>
 
   <div id="gamelistModal" class="modal">
