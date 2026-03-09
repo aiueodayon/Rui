@@ -6,87 +6,190 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EasyRPG Player</title>
   <script>
+  // 共通のダウンロード処理
+  function downloadData(data, fileName) {
+    const blob = new Blob([data], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // セーブデータ（エクスポート）ダウンロード機能
   function exportSaveData() {
-    // ゲームがロードされて変数「easyrpgPlayer」が準備できているかチェック
-    if (typeof easyrpgPlayer === 'undefined' || !easyrpgPlayer.FS) {
-      alert("ゲームの読み込みが完了していないか、ファイルシステムにアクセスできません。");
-      return;
-    }
+    // 1. もしEasyRPGのFSが公開されていればそれを使う
+    let fsObj = (typeof easyrpgPlayer !== 'undefined' && easyrpgPlayer.FS) ? easyrpgPlayer.FS : (typeof FS !== 'undefined' ? FS : null);
 
-    try {
-      const FS = easyrpgPlayer.FS; // easyrpgPlayerの中のFSを使用する
-      // 仮想ファイルシステムの /Save ディレクトリからファイル一覧を取得
-      const files = FS.readdir('/Save');
-      let foundSave = false;
-
-      files.forEach(file => {
-        // RPGツクール2000/2003のセーブデータ拡張子は通常 .lsd
-        if (file.endsWith('.lsd')) {
-          foundSave = true;
-          // ファイルを読み込んでBlob化
-          const data = FS.readFile('/Save/' + file);
-          const blob = new Blob([data], { type: 'application/octet-stream' });
-          const url = URL.createObjectURL(blob);
-          
-          // ダウンロード用のリンクを生成してクリックさせる
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = file;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }
-      });
-
-      if (!foundSave) {
-        alert("セーブデータが見つかりませんでした。\n（まだゲーム内でセーブを行っていない可能性があります）");
+    if (fsObj) {
+      try {
+        const files = fsObj.readdir('/Save');
+        let foundSave = false;
+        files.forEach(file => {
+          if (file.endsWith('.lsd')) {
+            foundSave = true;
+            const data = fsObj.readFile('/Save/' + file);
+            downloadData(data, file);
+          }
+        });
+        if (!foundSave) alert("セーブデータ(.lsd)が見つかりませんでした。");
+        return;
+      } catch (e) {
+        console.warn("FS経由のエクスポートに失敗。IndexedDBアクセスに切り替えます。", e);
       }
-    } catch (e) {
-      console.error("セーブデータのエクスポートに失敗しました", e);
-      alert("エクスポート中にエラーが発生しました。\n詳細: " + e.message);
     }
+
+    // 2. FSが隠蔽されている場合は IndexedDB から直接セーブデータを抽出する
+    const dbName = '/Save'; // EasyRPGのデフォルトセーブ領域名
+    const request = indexedDB.open(dbName);
+
+    request.onerror = function() {
+      alert("セーブデータの保存領域にアクセスできませんでした。\n（まだ一度もゲーム内でセーブを行っていない可能性があります）");
+    };
+
+    request.onsuccess = function(event) {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains('FILE_DATA')) {
+        alert("セーブデータが見つかりませんでした。\n（まだゲーム内で一度もセーブを行っていない可能性があります）");
+        db.close();
+        return;
+      }
+
+      const transaction = db.transaction(['FILE_DATA'], 'readonly');
+      const objectStore = transaction.objectStore('FILE_DATA');
+      const getAllRequest = objectStore.getAllKeys();
+
+      getAllRequest.onsuccess = function() {
+        const keys = getAllRequest.result;
+        let foundSave = false;
+
+        keys.forEach(key => {
+          if (typeof key === 'string' && key.endsWith('.lsd')) {
+            foundSave = true;
+            const getRequest = objectStore.get(key);
+            getRequest.onsuccess = function() {
+              const fileData = getRequest.result;
+              // ブラウザの内部データ構造から実際のファイルデータを取り出す
+              const data = (fileData && fileData.contents) ? fileData.contents : fileData;
+              const fileName = key.split('/').pop(); // パスを取り除いてファイル名のみにする
+              downloadData(data, fileName);
+            };
+          }
+        });
+
+        if (!foundSave) {
+          alert("セーブデータ(.lsd)が見つかりませんでした。\n（ゲーム内でセーブを行ってください）");
+        }
+      };
+
+      transaction.oncomplete = function() {
+        db.close();
+      };
+    };
   }
 
   // セーブデータ（インポート）アップロード機能
   function importSaveData(event) {
-    if (typeof easyrpgPlayer === 'undefined' || !easyrpgPlayer.FS) {
-      alert("ゲームの読み込みが完了していないか、ファイルシステムにアクセスできません。");
-      return;
-    }
-
     const file = event.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = function(e) {
       const data = new Uint8Array(e.target.result);
-      try {
-        const FS = easyrpgPlayer.FS; // easyrpgPlayerの中のFSを使用する
-        
-        // 仮想ファイルシステムに書き込み
-        FS.writeFile('/Save/' + file.name, data);
-        
-        // ブラウザ内の永続ストレージ(IndexedDBなど)と同期
-        FS.syncfs(false, function(err) {
-          if (err) {
-            console.error("同期エラー:", err);
-            alert("セーブデータの保存に失敗しました。");
-          } else {
-            alert(file.name + " をインポートしました！ゲーム内でロードしてください。");
-          }
-        });
-      } catch (err) {
-        console.error("ファイル書き込みエラー", err);
-        alert("インポート中にエラーが発生しました。\n詳細: " + err.message);
+
+      // 1. FSが公開されていればそれを使う
+      let fsObj = (typeof easyrpgPlayer !== 'undefined' && easyrpgPlayer.FS) ? easyrpgPlayer.FS : (typeof FS !== 'undefined' ? FS : null);
+
+      if (fsObj) {
+        try {
+          fsObj.writeFile('/Save/' + file.name, data);
+          fsObj.syncfs(false, function(err) {
+            if (err) {
+              alert("セーブデータの保存に失敗しました。");
+            } else {
+              alert(file.name + " をインポートしました！ゲーム内でロードしてください。");
+            }
+          });
+          event.target.value = '';
+          return;
+        } catch(err) {
+          console.warn("FS経由のインポートに失敗。IndexedDBアクセスに切り替えます。", err);
+        }
       }
+
+      // 2. FSが隠蔽されている場合は IndexedDB に直接データを書き込む
+      const dbName = '/Save';
+      const request = indexedDB.open(dbName);
+
+      request.onerror = function() {
+        alert("データベースにアクセスできませんでした。");
+      };
+
+      request.onsuccess = function(eventResult) {
+        const db = eventResult.target.result;
+        
+        if (!db.objectStoreNames.contains('FILE_DATA')) {
+          alert("セーブ領域がまだ作成されていません。\nゲームを一度開始して「セーブ」を行ってから、再度インポートしてください。");
+          db.close();
+          return;
+        }
+
+        const transaction = db.transaction(['FILE_DATA'], 'readwrite');
+        const objectStore = transaction.objectStore('FILE_DATA');
+        
+        const getAllKeysReq = objectStore.getAllKeys();
+        getAllKeysReq.onsuccess = function() {
+          const keys = getAllKeysReq.result;
+          
+          // データ保存時のパスの形式（絶対パスかファイル名のみか）を推測する
+          let targetKey = '/Save/' + file.name; 
+          for (const k of keys) {
+            if (typeof k === 'string' && k.includes('/Save/')) {
+              targetKey = k.substring(0, k.lastIndexOf('/') + 1) + file.name;
+              break;
+            } else if (typeof k === 'string' && !k.includes('/')) {
+              targetKey = file.name;
+              break;
+            }
+          }
+
+          const getReq = objectStore.get(targetKey);
+          getReq.onsuccess = function() {
+            let record = getReq.result;
+            // 既存のセーブデータ構造があれば上書きし、なければ新しく作る
+            if (record && record.contents !== undefined) {
+              record.contents = data;
+              record.timestamp = new Date();
+            } else {
+              record = {
+                timestamp: new Date(),
+                mode: 33206, // 読み書き可能フラグ
+                contents: data
+              };
+            }
+            
+            const putReq = objectStore.put(record, targetKey);
+            putReq.onsuccess = function() {
+              alert(file.name + " をインポートしました！\n反映させるためにページを再読み込みします。");
+              window.location.reload(); // ゲームに認識させるためリロード
+            };
+            putReq.onerror = function() {
+              alert("ファイルのインポートに失敗しました。");
+            };
+          };
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+      };
+      
+      event.target.value = ''; // 連続アップロードできるようにリセット
     };
-    // ファイルをArrayBufferとして読み込む
     reader.readAsArrayBuffer(file);
-    
-    // 連続して同じファイルを読み込めるようにinputの値をリセット
-    event.target.value = '';
   }
 
     const gamename = 'Ruina';
@@ -678,12 +781,7 @@
 
       canvas.addEventListener('contextmenu', event => {
         event.preventDefault();
-        // simulateKeyboardInput('Escape', 27);
       });
-
-      // canvas.addEventListener('click', () => {
-      //   simulateKeyboardInput('Enter', 13);
-      // });
     }
 
     updateTouchControlsVisibility();
