@@ -8,7 +8,14 @@
   <script>
   // セーブデータ（エクスポート）ダウンロード機能
   function exportSaveData() {
+    // ゲームがロードされて変数「easyrpgPlayer」が準備できているかチェック
+    if (typeof easyrpgPlayer === 'undefined' || !easyrpgPlayer.FS) {
+      alert("ゲームの読み込みが完了していないか、ファイルシステムにアクセスできません。");
+      return;
+    }
+
     try {
+      const FS = easyrpgPlayer.FS; // easyrpgPlayerの中のFSを使用する
       // 仮想ファイルシステムの /Save ディレクトリからファイル一覧を取得
       const files = FS.readdir('/Save');
       let foundSave = false;
@@ -34,16 +41,21 @@
       });
 
       if (!foundSave) {
-        alert("セーブデータが見つかりませんでした。");
+        alert("セーブデータが見つかりませんでした。\n（まだゲーム内でセーブを行っていない可能性があります）");
       }
     } catch (e) {
       console.error("セーブデータのエクスポートに失敗しました", e);
-      alert("エクスポート中にエラーが発生しました。");
+      alert("エクスポート中にエラーが発生しました。\n詳細: " + e.message);
     }
   }
 
   // セーブデータ（インポート）アップロード機能
   function importSaveData(event) {
+    if (typeof easyrpgPlayer === 'undefined' || !easyrpgPlayer.FS) {
+      alert("ゲームの読み込みが完了していないか、ファイルシステムにアクセスできません。");
+      return;
+    }
+
     const file = event.target.files[0];
     if (!file) return;
 
@@ -51,6 +63,8 @@
     reader.onload = function(e) {
       const data = new Uint8Array(e.target.result);
       try {
+        const FS = easyrpgPlayer.FS; // easyrpgPlayerの中のFSを使用する
+        
         // 仮想ファイルシステムに書き込み
         FS.writeFile('/Save/' + file.name, data);
         
@@ -65,7 +79,7 @@
         });
       } catch (err) {
         console.error("ファイル書き込みエラー", err);
-        alert("インポート中にエラーが発生しました。");
+        alert("インポート中にエラーが発生しました。\n詳細: " + err.message);
       }
     };
     // ファイルをArrayBufferとして読み込む
@@ -74,6 +88,7 @@
     // 連続して同じファイルを読み込めるようにinputの値をリセット
     event.target.value = '';
   }
+
     const gamename = 'Ruina';
     window.onload = function () {
       if (!window.location.search.includes('game=' + gamename)) {
